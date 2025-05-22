@@ -24,6 +24,8 @@ def callback():
 
     return 'OK'
 
+from linebot.models import QuickReply, QuickReplyButton, MessageAction
+
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_input = event.message.text
@@ -33,16 +35,31 @@ def handle_message(event):
         if len(parts) == 2:
             origin = parts[0].strip()
             destination = parts[1].strip()
-            reply = f"✅ 出發地：{origin}\n✅ 目的地：{destination}"
-        else:
-            reply = "請使用「出發地 到 目的地」格式，例如：東吳大學到士林捷運站"
-    else:
-        reply = "請輸入格式為「出發地 到 目的地」的訊息"
 
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(text=reply)
-    )
+            reply_text = f"✅ 出發地：{origin}\n✅ 目的地：{destination}\n請選擇是否共乘："
+
+            # 回傳 quick reply：是否共乘
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(
+                    text=reply_text,
+                    quick_reply=QuickReply(items=[
+                        QuickReplyButton(action=MessageAction(label="共乘", text="我選擇共乘")),
+                        QuickReplyButton(action=MessageAction(label="不共乘", text="我不共乘")),
+                    ])
+                )
+            )
+        else:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="請使用「出發地 到 目的地」格式，例如：東吳大學到士林捷運站")
+            )
+    else:
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text="請輸入格式為「出發地 到 目的地」的訊息")
+        )
+
 
 
 import os
