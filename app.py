@@ -40,6 +40,40 @@ def handle_message(event):
     user_id = event.source.user_id
     user_input = event.message.text
 
+    # 查詢共乘紀錄
+    if user_input == "查詢我的預約":
+        user_rides = [r for r in ride_records if r["user_id"] == user_id]
+        if not user_rides:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="你目前尚未建立任何預約。")
+            )
+            return
+
+        latest_ride = user_rides[-1]  # 最新一筆
+        match_found = False
+        for r in ride_records:
+            if r["user_id"] != user_id and r["ride_type"] == "共乘":
+                if r["origin"] == latest_ride["origin"] and r["time"] == latest_ride["time"]:
+                    match_found = True
+                    break
+
+        reply_text = f"""📋 你最近的預約如下：
+
+🛫 出發地：{latest_ride['origin']}
+🛬 目的地：{latest_ride['destination']}
+🚘 共乘狀態：{latest_ride['ride_type']}
+🕐 預約時間：{latest_ride['time']}
+💳 付款方式：{latest_ride['payment']}
+👥 共乘配對狀態：{"已找到共乘對象！" if match_found else "尚未有共乘對象"}
+"""
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=reply_text)
+        )
+        return
+
+
     # Step 1：輸入出發地和目的地
     if '到' in user_input:
         origin, destination = user_input.split('到')
