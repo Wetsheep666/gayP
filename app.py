@@ -26,12 +26,24 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    msg = event.message.text
-    reply = f"你說了：{msg}"
+    user_input = event.message.text
+
+    if '到' in user_input:
+        parts = user_input.split('到')
+        if len(parts) == 2:
+            origin = parts[0].strip()
+            destination = parts[1].strip()
+            reply = f"✅ 出發地：{origin}\n✅ 目的地：{destination}"
+        else:
+            reply = "請使用「出發地 到 目的地」格式，例如：東吳大學到士林捷運站"
+    else:
+        reply = "請輸入格式為「出發地 到 目的地」的訊息"
+
     line_bot_api.reply_message(
         event.reply_token,
         TextSendMessage(text=reply)
     )
+
 
 import os
 
