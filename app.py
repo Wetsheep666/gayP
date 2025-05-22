@@ -33,5 +33,9 @@ def handle_message(event):
         TextSendMessage(text=reply)
     )
 
+import os
+
 if __name__ == "__main__":
-    app.run()
+    port = int(os.environ.get('PORT', 5000))  # Render 會指定 PORT
+    app.run(host='0.0.0.0', port=port)
+
