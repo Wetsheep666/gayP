@@ -1,3 +1,4 @@
+
 import os
 import sqlite3
 from flask import Flask, request, abort
@@ -25,7 +26,7 @@ user_states = {}
 def init_db():
     conn = sqlite3.connect("rides.db")
     c = conn.cursor()
-    c.execute('''
+    c.execute("""
         CREATE TABLE IF NOT EXISTS ride_records (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT,
@@ -35,7 +36,7 @@ def init_db():
             time TEXT,
             payment TEXT
         )
-    ''')
+    """)
     conn.commit()
     conn.close()
 
@@ -80,14 +81,13 @@ def handle_message(event):
 
         conn = sqlite3.connect("rides.db")
         c = conn.cursor()
-        c.execute('''
+        c.execute("""
             SELECT * FROM ride_records
             WHERE user_id != ? AND ride_type = '共乘' AND origin = ? AND time = ?
-        ''', (user_id, origin, time))
+        """, (user_id, origin, time))
         match_found = c.fetchone() is not None
         conn.close()
 
-        map_link = f"https://www.google.com/maps/dir/{origin}/{destination}"
         reply = f"""📋 你最近的預約如下：
 🛫 出發地：{origin}
 🛬 目的地：{destination}
@@ -95,7 +95,6 @@ def handle_message(event):
 🕐 預約時間：{time}
 💳 付款方式：{payment}
 👥 共乘配對狀態：{"✅ 已找到共乘對象！" if match_found else "⏳ 尚未有共乘對象"}
-🗺 路線預覽：{map_link}
 """
         line_bot_api.reply_message(
             event.reply_token,
@@ -103,15 +102,16 @@ def handle_message(event):
         )
         return
 
-    if "到" in user_input:
-        parts = user_input.split("到")
-        if len(parts) != 2:
+    if "到" in user_input and "我預約" not in user_input and "我使用" not in user_input:
+        try:
+            origin, destination = map(str.strip, user_input.split("到"))
+        except ValueError:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="請使用『出發地 到 目的地』的格式")
+                TextSendMessage(text="請輸入格式為『出發地 到 目的地』")
             )
             return
-        origin, destination = map(str.strip, parts)
+
         user_states[user_id] = {
             "origin": origin,
             "destination": destination
@@ -142,16 +142,18 @@ def handle_message(event):
 
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text="請輸入你想搭乘的時間，例如：我預約 15:30")
+            TextSendMessage(
+                text="請輸入你想預約的時間，例如：我預約 15:30"
+            )
         )
         return
 
-    if user_input.startswith("我預約 "):
-        time = user_input.replace("我預約 ", "").strip()
-        if user_id not in user_states:
+    if user_input.startswith("我預約"):
+        time = user_input.replace("我預約", "").strip()
+        if user_id not in user_states or "ride_type" not in user_states[user_id]:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="請先輸入『出發地 到 目的地』")
+                TextSendMessage(text="請先輸入『出發地 到 目的地』並選擇共乘狀態")
             )
             return
 
@@ -160,7 +162,7 @@ def handle_message(event):
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(
-                text=f"🕐 你選擇的搭乘時間是：{time}\n請選擇付款方式：",
+                text=f"🕐 你選擇的時間是 {time}\n請選擇付款方式：",
                 quick_reply=QuickReply(items=[
                     QuickReplyButton(action=MessageAction(label="LINE Pay", text="我使用 LINE Pay")),
                     QuickReplyButton(action=MessageAction(label="現金", text="我使用 現金")),
@@ -170,12 +172,12 @@ def handle_message(event):
         )
         return
 
-    if user_input.startswith("我使用 "):
-        payment = user_input.replace("我使用 ", "")
-        if user_id not in user_states:
+    if user_input.startswith("我使用"):
+        payment = user_input.replace("我使用", "").strip()
+        if user_id not in user_states or "time" not in user_states[user_id]:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="請先輸入『出發地 到 目的地』")
+                TextSendMessage(text="請先完成前面的預約步驟")
             )
             return
 
@@ -184,10 +186,10 @@ def handle_message(event):
 
         conn = sqlite3.connect("rides.db")
         c = conn.cursor()
-        c.execute('''
+        c.execute("""
             INSERT INTO ride_records (user_id, origin, destination, ride_type, time, payment)
             VALUES (?, ?, ?, ?, ?, ?)
-        ''', (
+        """, (
             user_id,
             data["origin"],
             data["destination"],
@@ -197,25 +199,26 @@ def handle_message(event):
         ))
         conn.commit()
 
-        c.execute('''
+        c.execute("""
             SELECT * FROM ride_records
             WHERE user_id != ? AND ride_type = '共乘' AND origin = ? AND time = ?
-        ''', (user_id, data["origin"], data["time"]))
+        """, (user_id, data["origin"], data["time"]))
         match = c.fetchone()
         conn.close()
 
-        map_link = f"https://www.google.com/maps/dir/{data['origin']}/{data['destination']}"
+        route_url = f"https://www.google.com/maps/dir/{data['origin']}/{data['destination']}"
+
         reply = f"""🎉 預約完成！
 🛫 出發地：{data['origin']}
 🛬 目的地：{data['destination']}
 🚘 共乘狀態：{data['ride_type']}
 🕐 預約時間：{data['time']}
-💳 付款方式：{payment}
-🗺 路線預覽：{map_link}
-"""
+💳 付款方式：{payment}"""
+
         if match:
             reply += "\n🚨 發現共乘對象！你和另一位使用者搭乘相同班次！"
-        reply += "\n\n👉 想再預約，請再輸入「出發地 到 目的地」"
+        reply += f"\n\n📍 路線預覽：\n{route_url}"
+        reply += "\n\n👉 想再預約，請再輸入『出發地 到 目的地』"
 
         user_states.pop(user_id, None)
 
@@ -227,10 +230,9 @@ def handle_message(event):
 
     line_bot_api.reply_message(
         event.reply_token,
-        TextSendMessage(text="請輸入格式為「出發地 到 目的地」的訊息")
+        TextSendMessage(text="請輸入格式為『出發地 到 目的地』的訊息")
     )
 
-# 啟動 Flask 伺服器
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
