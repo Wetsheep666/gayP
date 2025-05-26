@@ -59,7 +59,7 @@ def callback():
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_id = event.source.user_id
-    user_input = event.message.text
+    user_input = event.message.text.strip()
 
     if user_input == "查詢我的預約":
         conn = sqlite3.connect("rides.db")
@@ -87,6 +87,7 @@ def handle_message(event):
         match_found = c.fetchone() is not None
         conn.close()
 
+        map_link = f"https://www.google.com/maps/dir/{origin}/{destination}"
         reply = f"""📋 你最近的預約如下：
 🛫 出發地：{origin}
 🛬 目的地：{destination}
@@ -94,6 +95,7 @@ def handle_message(event):
 🕐 預約時間：{time}
 💳 付款方式：{payment}
 👥 共乘配對狀態：{"✅ 已找到共乘對象！" if match_found else "⏳ 尚未有共乘對象"}
+🗺 路線預覽：{map_link}
 """
         line_bot_api.reply_message(
             event.reply_token,
@@ -102,7 +104,14 @@ def handle_message(event):
         return
 
     if "到" in user_input:
-        origin, destination = map(str.strip, user_input.split("到"))
+        parts = user_input.split("到")
+        if len(parts) != 2:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="請使用『出發地 到 目的地』的格式")
+            )
+            return
+        origin, destination = map(str.strip, parts)
         user_states[user_id] = {
             "origin": origin,
             "destination": destination
@@ -133,19 +142,12 @@ def handle_message(event):
 
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(
-                text=f"✅ 你選擇：{ride_type}\n請選擇預約時間：",
-                quick_reply=QuickReply(items=[
-                    QuickReplyButton(action=MessageAction(label="12:00", text="我選擇 12:00")),
-                    QuickReplyButton(action=MessageAction(label="13:00", text="我選擇 13:00")),
-                    QuickReplyButton(action=MessageAction(label="14:00", text="我選擇 14:00")),
-                ])
-            )
+            TextSendMessage(text="請輸入你想搭乘的時間，例如：我預約 15:30")
         )
         return
 
-    if user_input.startswith("我選擇 "):
-        time = user_input.replace("我選擇 ", "")
+    if user_input.startswith("我預約 "):
+        time = user_input.replace("我預約 ", "").strip()
         if user_id not in user_states:
             line_bot_api.reply_message(
                 event.reply_token,
@@ -195,7 +197,6 @@ def handle_message(event):
         ))
         conn.commit()
 
-        # 查找有無共乘對象
         c.execute('''
             SELECT * FROM ride_records
             WHERE user_id != ? AND ride_type = '共乘' AND origin = ? AND time = ?
@@ -203,12 +204,14 @@ def handle_message(event):
         match = c.fetchone()
         conn.close()
 
+        map_link = f"https://www.google.com/maps/dir/{data['origin']}/{data['destination']}"
         reply = f"""🎉 預約完成！
 🛫 出發地：{data['origin']}
 🛬 目的地：{data['destination']}
 🚘 共乘狀態：{data['ride_type']}
 🕐 預約時間：{data['time']}
 💳 付款方式：{payment}
+🗺 路線預覽：{map_link}
 """
         if match:
             reply += "\n🚨 發現共乘對象！你和另一位使用者搭乘相同班次！"
