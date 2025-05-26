@@ -61,6 +61,7 @@ def handle_message(event):
     user_id = event.source.user_id
     user_input = event.message.text
 
+    # 查詢預約紀錄
     if user_input == "查詢我的預約":
         conn = sqlite3.connect("rides.db")
         c = conn.cursor()
@@ -101,6 +102,7 @@ def handle_message(event):
         )
         return
 
+    # Step 1：輸入「出發地 到 目的地」
     if "到" in user_input:
         origin, destination = map(str.strip, user_input.split("到"))
         user_states[user_id] = {
@@ -120,6 +122,7 @@ def handle_message(event):
         )
         return
 
+    # Step 2：選擇共乘或不共乘
     if user_input in ["我選擇共乘", "我不共乘"]:
         ride_type = "共乘" if "共乘" in user_input else "不共乘"
         if user_id not in user_states:
@@ -133,19 +136,13 @@ def handle_message(event):
 
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(
-                text=f"✅ 你選擇：{ride_type}\n請選擇預約時間：",
-                quick_reply=QuickReply(items=[
-                    QuickReplyButton(action=MessageAction(label="12:00", text="我選擇 12:00")),
-                    QuickReplyButton(action=MessageAction(label="13:00", text="我選擇 13:00")),
-                    QuickReplyButton(action=MessageAction(label="14:00", text="我選擇 14:00")),
-                ])
-            )
+            TextSendMessage(text="請輸入你想要的搭乘時間，例如：我預約 14:30")
         )
         return
 
-    if user_input.startswith("我選擇 "):
-        time = user_input.replace("我選擇 ", "")
+    # Step 3：輸入預約時間
+    if user_input.startswith("我預約 "):
+        time = user_input.replace("我預約 ", "").strip()
         if user_id not in user_states:
             line_bot_api.reply_message(
                 event.reply_token,
@@ -158,7 +155,7 @@ def handle_message(event):
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(
-                text=f"🕐 你選擇的搭乘時間是：{time}\n請選擇付款方式：",
+                text=f"🕐 你選擇的時間是：{time}\n請選擇付款方式：",
                 quick_reply=QuickReply(items=[
                     QuickReplyButton(action=MessageAction(label="LINE Pay", text="我使用 LINE Pay")),
                     QuickReplyButton(action=MessageAction(label="現金", text="我使用 現金")),
@@ -168,6 +165,7 @@ def handle_message(event):
         )
         return
 
+    # Step 4：輸入付款方式並儲存
     if user_input.startswith("我使用 "):
         payment = user_input.replace("我使用 ", "")
         if user_id not in user_states:
@@ -195,7 +193,7 @@ def handle_message(event):
         ))
         conn.commit()
 
-        # 查找有無共乘對象
+        # 查詢共乘配對
         c.execute('''
             SELECT * FROM ride_records
             WHERE user_id != ? AND ride_type = '共乘' AND origin = ? AND time = ?
@@ -222,12 +220,8 @@ def handle_message(event):
         )
         return
 
+    # 未知格式的訊息
     line_bot_api.reply_message(
         event.reply_token,
         TextSendMessage(text="請輸入格式為「出發地 到 目的地」的訊息")
     )
-
-# 啟動 Flask 伺服器
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
