@@ -3,3 +3,4 @@ line-bot-sdk
 python-dotenv
 geopy
 requests
+gunicorn==21.2.0
