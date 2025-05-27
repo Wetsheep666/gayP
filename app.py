@@ -1,6 +1,6 @@
-
 import os
 import sqlite3
+import uuid
 from flask import Flask, request, abort
 from dotenv import load_dotenv
 from linebot import LineBotApi, WebhookHandler
@@ -9,17 +9,11 @@ from linebot.models import (
     QuickReply, QuickReplyButton, MessageAction
 )
 
-# 載入 .env 環境變數
 load_dotenv()
-
-# 初始化 Flask app
 app = Flask(__name__)
 
-# 初始化 LINE Bot
 line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
-
-# 使用者狀態暫存
 user_states = {}
 
 # 初始化 SQLite 資料庫
@@ -34,7 +28,10 @@ def init_db():
             destination TEXT,
             ride_type TEXT,
             time TEXT,
-            payment TEXT
+            payment TEXT,
+            status TEXT DEFAULT 'waiting',
+            matched_group_id TEXT,
+            price INTEGER
         )
     """)
     conn.commit()
@@ -50,12 +47,51 @@ def home():
 def callback():
     signature = request.headers["X-Line-Signature"]
     body = request.get_data(as_text=True)
-
     try:
         handler.handle(body, signature)
     except:
         abort(400)
     return "OK"
+
+def try_match(user_id):
+    conn = sqlite3.connect("rides.db")
+    c = conn.cursor()
+
+    c.execute("SELECT * FROM ride_records WHERE user_id = ? AND status = 'waiting'", (user_id,))
+    user = c.fetchone()
+    if not user:
+        conn.close()
+        return None
+
+    user_time = user[5]
+    origin = user[2]
+    ride_type = user[4]
+
+    # 查詢其他等待中、同共乘、同出發地、同時間的用戶
+    c.execute("""
+        SELECT * FROM ride_records
+        WHERE user_id != ? AND ride_type = '共乘' AND status = 'waiting'
+        AND origin = ? AND time = ?
+    """, (user_id, origin, user_time))
+    matches = c.fetchall()
+
+    if matches:
+        group_id = str(uuid.uuid4())[:8]
+        matched_ids = [user_id] + [m[1] for m in matches]
+        price = 200 // len(matched_ids)
+
+        for uid in matched_ids:
+            c.execute("""
+                UPDATE ride_records
+                SET status = 'matched', matched_group_id = ?, price = ?
+                WHERE user_id = ? AND status = 'waiting'
+            """, (group_id, price, uid))
+        conn.commit()
+        conn.close()
+        return (group_id, price, matched_ids)
+    else:
+        conn.close()
+        return None
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
@@ -65,7 +101,7 @@ def handle_message(event):
     if user_input == "查詢我的預約":
         conn = sqlite3.connect("rides.db")
         c = conn.cursor()
-        c.execute("SELECT * FROM ride_records WHERE user_id = ?", (user_id,))
+        c.execute("SELECT * FROM ride_records WHERE user_id = ? ORDER BY id DESC", (user_id,))
         user_rides = c.fetchall()
         conn.close()
 
@@ -76,29 +112,33 @@ def handle_message(event):
             )
             return
 
-        latest = user_rides[-1]
-        origin, destination, ride_type, time, payment = latest[2:7]
-
-        conn = sqlite3.connect("rides.db")
-        c = conn.cursor()
-        c.execute("""
-            SELECT * FROM ride_records
-            WHERE user_id != ? AND ride_type = '共乘' AND origin = ? AND time = ?
-        """, (user_id, origin, time))
-        match_found = c.fetchone() is not None
-        conn.close()
-
+        latest = user_rides[0]
+        origin, destination, ride_type, time, payment, status, matched_group_id, price = latest[2:10]
         reply = f"""📋 你最近的預約如下：
 🛫 出發地：{origin}
 🛬 目的地：{destination}
 🚘 共乘狀態：{ride_type}
 🕐 預約時間：{time}
 💳 付款方式：{payment}
-👥 共乘配對狀態：{"✅ 已找到共乘對象！" if match_found else "⏳ 尚未有共乘對象"}
+⏳ 配對狀態：{status}
 """
+
+        if status == "matched":
+            reply += f"👥 共乘群組 ID：{matched_group_id}\n💰 預估分攤費用：NT${price}"
+
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+        return
+
+    if user_input == "取消配對":
+        conn = sqlite3.connect("rides.db")
+        c = conn.cursor()
+        c.execute("UPDATE ride_records SET status = 'cancelled' WHERE user_id = ? AND status = 'waiting'", (user_id,))
+        conn.commit()
+        conn.close()
+
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text=reply)
+            TextSendMessage(text="✅ 你已取消配對等待。")
         )
         return
 
@@ -142,9 +182,7 @@ def handle_message(event):
 
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(
-                text="請輸入你想預約的時間，例如：我預約 15:30"
-            )
+            TextSendMessage(text="請輸入你想預約的時間，例如：我預約 15:30")
         )
         return
 
@@ -198,34 +236,31 @@ def handle_message(event):
             payment
         ))
         conn.commit()
-
-        c.execute("""
-            SELECT * FROM ride_records
-            WHERE user_id != ? AND ride_type = '共乘' AND origin = ? AND time = ?
-        """, (user_id, data["origin"], data["time"]))
-        match = c.fetchone()
         conn.close()
 
-        route_url = f"https://www.google.com/maps/dir/{data['origin']}/{data['destination']}"
+        match_result = try_match(user_id)
 
+        route_url = f"https://www.google.com/maps/dir/{data['origin']}/{data['destination']}"
         reply = f"""🎉 預約完成！
 🛫 出發地：{data['origin']}
 🛬 目的地：{data['destination']}
 🚘 共乘狀態：{data['ride_type']}
 🕐 預約時間：{data['time']}
-💳 付款方式：{payment}"""
+💳 付款方式：{payment}
+📍 路線預覽：{route_url}
+"""
 
-        if match:
-            reply += "\n🚨 發現共乘對象！你和另一位使用者搭乘相同班次！"
-        reply += f"\n\n📍 路線預覽：\n{route_url}"
+        if data["ride_type"] == "共乘":
+            if match_result:
+                group_id, price, members = match_result
+                reply += f"\n✅ 已成功配對共乘對象！\n👥 群組 ID：{group_id}\n💰 分攤費用：NT${price}"
+            else:
+                reply += "\n⏳ 尚未找到共乘對象，你已加入等待清單。\n輸入「取消配對」即可取消等待。"
+
         reply += "\n\n👉 想再預約，請再輸入『出發地 到 目的地』"
-
         user_states.pop(user_id, None)
 
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text=reply)
-        )
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
 
     line_bot_api.reply_message(
