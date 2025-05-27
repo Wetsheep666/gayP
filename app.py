@@ -8,6 +8,7 @@ from linebot.models import (
     MessageEvent, TextMessage, TextSendMessage,
     QuickReply, QuickReplyButton, MessageAction
 )
+from datetime import datetime
 
 load_dotenv()
 app = Flask(__name__)
@@ -16,7 +17,6 @@ line_bot_api = LineBotApi(os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 user_states = {}
 
-# 初始化 SQLite 資料庫
 def init_db():
     conn = sqlite3.connect("rides.db")
     c = conn.cursor()
@@ -47,6 +47,7 @@ def home():
 def callback():
     signature = request.headers["X-Line-Signature"]
     body = request.get_data(as_text=True)
+
     try:
         handler.handle(body, signature)
     except:
@@ -63,17 +64,29 @@ def try_match(user_id):
         conn.close()
         return None
 
-    user_time = user[5]
-    origin = user[2]
-    ride_type = user[4]
+    origin, destination, user_time_str = user[2], user[3], user[5]
+    try:
+        user_time = datetime.strptime(user_time_str, "%H:%M")
+    except:
+        conn.close()
+        return None
 
-    # 查詢其他等待中、同共乘、同出發地、同時間的用戶
     c.execute("""
         SELECT * FROM ride_records
-        WHERE user_id != ? AND ride_type = '共乘' AND status = 'waiting'
-        AND origin = ? AND time = ?
-    """, (user_id, origin, user_time))
-    matches = c.fetchall()
+        WHERE user_id != ?
+        AND status = 'waiting'
+        AND ride_type = '共乘'
+        AND origin = ?
+        AND destination = ?
+    """, (user_id, origin, destination))
+    matches = []
+    for row in c.fetchall():
+        try:
+            match_time = datetime.strptime(row[5], "%H:%M")
+            if abs((match_time - user_time).total_seconds()) <= 600:
+                matches.append(row)
+        except:
+            continue
 
     if matches:
         group_id = str(uuid.uuid4())[:8]
@@ -101,7 +114,7 @@ def handle_message(event):
     if user_input == "查詢我的預約":
         conn = sqlite3.connect("rides.db")
         c = conn.cursor()
-        c.execute("SELECT * FROM ride_records WHERE user_id = ? ORDER BY id DESC", (user_id,))
+        c.execute("SELECT * FROM ride_records WHERE user_id = ?", (user_id,))
         user_rides = c.fetchall()
         conn.close()
 
@@ -112,33 +125,34 @@ def handle_message(event):
             )
             return
 
-        latest = user_rides[0]
-        origin, destination, ride_type, time, payment, status, matched_group_id, price = latest[2:10]
+        latest = user_rides[-1]
+        origin, destination, ride_type, time, payment, status, price = latest[2:9]
+
         reply = f"""📋 你最近的預約如下：
 🛫 出發地：{origin}
 🛬 目的地：{destination}
 🚘 共乘狀態：{ride_type}
 🕐 預約時間：{time}
 💳 付款方式：{payment}
-⏳ 配對狀態：{status}
+📦 狀態：{status}
+💰 分擔費用：{price if price else '尚未配對'}
 """
-
-        if status == "matched":
-            reply += f"👥 共乘群組 ID：{matched_group_id}\n💰 預估分攤費用：NT${price}"
-
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=reply)
+        )
         return
 
-    if user_input == "取消配對":
+    if user_input == "取消預約":
         conn = sqlite3.connect("rides.db")
         c = conn.cursor()
-        c.execute("UPDATE ride_records SET status = 'cancelled' WHERE user_id = ? AND status = 'waiting'", (user_id,))
+        c.execute("DELETE FROM ride_records WHERE user_id = ? AND status = 'waiting'", (user_id,))
         conn.commit()
         conn.close()
 
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text="✅ 你已取消配對等待。")
+            TextSendMessage(text="❌ 已取消等待中的預約。")
         )
         return
 
@@ -239,28 +253,29 @@ def handle_message(event):
         conn.close()
 
         match_result = try_match(user_id)
-
         route_url = f"https://www.google.com/maps/dir/{data['origin']}/{data['destination']}"
+
         reply = f"""🎉 預約完成！
 🛫 出發地：{data['origin']}
 🛬 目的地：{data['destination']}
 🚘 共乘狀態：{data['ride_type']}
 🕐 預約時間：{data['time']}
-💳 付款方式：{payment}
-📍 路線預覽：{route_url}
-"""
+💳 付款方式：{payment}"""
 
-        if data["ride_type"] == "共乘":
-            if match_result:
-                group_id, price, members = match_result
-                reply += f"\n✅ 已成功配對共乘對象！\n👥 群組 ID：{group_id}\n💰 分攤費用：NT${price}"
-            else:
-                reply += "\n⏳ 尚未找到共乘對象，你已加入等待清單。\n輸入「取消配對」即可取消等待。"
+        if match_result:
+            group_id, price, matched_ids = match_result
+            reply += f"\n✅ 配對成功！你已與其他 {len(matched_ids)-1} 位乘客共乘。\n💰 每人應付：{price} 元"
+        else:
+            reply += "\n⏳ 尚未找到共乘對象，你現在正在等待中...\n輸入『取消預約』可退出配對等待。"
 
-        reply += "\n\n👉 想再預約，請再輸入『出發地 到 目的地』"
+        reply += f"\n\n📍 路線預覽：\n{route_url}\n👉 想再預約，請輸入『出發地 到 目的地』"
+
         user_states.pop(user_id, None)
 
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text=reply)
+        )
         return
 
     line_bot_api.reply_message(
