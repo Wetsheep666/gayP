@@ -225,63 +225,73 @@ def handle_message(event):
         return
 
     if user_input.startswith("我使用"):
-        payment = user_input.replace("我使用", "").strip()
-        if user_id not in user_states or "time" not in user_states[user_id]:
+     payment = user_input.replace("我使用", "").strip()
+
+    if user_id not in user_states or "time" not in user_states[user_id]:
             line_bot_api.reply_message(
                 event.reply_token,
                 TextSendMessage(text="請先完成前面的預約步驟")
             )
             return
 
-        user_states[user_id]["payment"] = payment
-        data = user_states[user_id]
+    user_states[user_id]["payment"] = payment
+    data = user_states[user_id]
 
-        conn = sqlite3.connect("rides.db")
-        c = conn.cursor()
-        c.execute("""
-            INSERT INTO ride_records (user_id, origin, destination, ride_type, time, payment)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            user_id,
-            data["origin"],
-            data["destination"],
-            data["ride_type"],
-            data["time"],
-            payment
-        ))
-        conn.commit()
-        conn.close()
+    print(f"[Debug] 準備儲存以下使用者資料：{user_id}")
+    for key, val in data.items():
+            print(f"  {key}: {val}")
 
-        match_result = try_match(user_id)
-        route_url = f"https://www.google.com/maps/dir/{data['origin']}/{data['destination']}"
+    try:
+            conn = sqlite3.connect("rides.db")
+            c = conn.cursor()
+            c.execute("""
+                INSERT INTO ride_records (user_id, origin, destination, ride_type, time, payment)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                user_id,
+                data["origin"],
+                data["destination"],
+                data["ride_type"],
+                data["time"],
+                payment
+            ))
+            conn.commit()
+    except Exception as e:
+            print(f"[錯誤] 寫入資料庫失敗：{e}")
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="❌ 資料儲存時發生錯誤，請稍後再試！")
+            )
+            return
+    finally:
+            conn.close()
 
-        reply = f"""🎉 預約完成！
+    match_result = try_match(user_id)
+    route_url = f"https://www.google.com/maps/dir/{data['origin']}/{data['destination']}"
+
+    reply = f"""🎉 預約完成！
 🛫 出發地：{data['origin']}
 🛬 目的地：{data['destination']}
 🚘 共乘狀態：{data['ride_type']}
 🕐 預約時間：{data['time']}
 💳 付款方式：{payment}"""
 
-        if match_result:
+    if match_result:
             group_id, price, matched_ids = match_result
             reply += f"\n✅ 配對成功！你已與其他 {len(matched_ids)-1} 位乘客共乘。\n💰 每人應付：{price} 元"
-        else:
+    else:
             reply += "\n⏳ 尚未找到共乘對象，你現在正在等待中...\n輸入『取消預約』可退出配對等待。"
 
-        reply += f"\n\n📍 路線預覽：\n{route_url}\n👉 想再預約，請輸入『出發地 到 目的地』"
+    reply += f"\n\n📍 路線預覽：\n{route_url}\n👉 想再預約，請輸入『出發地 到 目的地』"
 
-        user_states.pop(user_id, None)
+    user_states.pop(user_id, None)
 
-        line_bot_api.reply_message(
+    line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(text=reply)
         )
-        return
+    return
 
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(text="請輸入格式為『出發地 到 目的地』的訊息")
-    )
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
