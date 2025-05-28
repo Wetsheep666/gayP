@@ -1,6 +1,4 @@
-gunicorn==21.2.0
-flask
-line-bot-sdk
+Flask
+gunicorn
+line-bot-sdk>=3.0.0
 python-dotenv
-geopy
-requests
